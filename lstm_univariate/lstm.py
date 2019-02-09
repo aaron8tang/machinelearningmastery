@@ -65,8 +65,16 @@ def invert_scale(scaler, X, value):
 	return inverted[0, -1]
 
 
-# fit an LSTM network to training data
 def fit_lstm(train, batch_size, nb_epoch, neurons):
+	"""
+	fit an LSTM network to training data
+	a matrix with the dimensions: [samples, time steps, features]
+	:param train:
+	:param batch_size:
+	:param nb_epoch:
+	:param neurons:
+	:return:
+	"""
 	X, y = train[:, 0:-1], train[:, -1]
 	X = X.reshape(X.shape[0], 1, X.shape[1])
 	model = Sequential()
@@ -74,10 +82,27 @@ def fit_lstm(train, batch_size, nb_epoch, neurons):
 	model.add(Dense(1))
 	model.compile(loss='mean_squared_error', optimizer='adam')
 	for i in range(nb_epoch):
+		model.fit(X, y, epochs=1, batch_size=batch_size, verbose=1, shuffle=False)
+		model.reset_states()
+
+	#这么使用也是可以的，RMSE甚至更低
+	# model.fit(X, y, epochs=nb_epoch, batch_size=batch_size, verbose=1)
+
+	return model
+
+# fit an LSTM network to training data
+def fit_lstm_multiple_layer(train, batch_size, nb_epoch, neurons):
+	X, y = train[:, 0:-1], train[:, -1]
+	X = X.reshape(X.shape[0], 1, X.shape[1])
+	model = Sequential()
+	model.add(LSTM(neurons, batch_input_shape=(batch_size, X.shape[1], X.shape[2]), stateful=True))
+
+	model.add(Dense(1))
+	model.compile(loss='mean_squared_error', optimizer='adam')
+	for i in range(nb_epoch):
 		model.fit(X, y, epochs=1, batch_size=batch_size, verbose=0, shuffle=False)
 		model.reset_states()
 	return model
-
 
 # make a one-step forecast
 def forecast_lstm(model, batch_size, X):
@@ -87,33 +112,47 @@ def forecast_lstm(model, batch_size, X):
 
 
 # load dataset
-series = read_csv('./data/shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
+series = read_csv('../data/shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
 
 # transform data to be stationary
 raw_values = series.values
 diff_values = difference(raw_values, 1)
+print("diff_values",diff_values)
 
 # transform data to be supervised learning
 supervised = timeseries_to_supervised(diff_values, 1)
 supervised_values = supervised.values
+print("supervised_values",supervised_values)
 
+train_index = -12
 # split data into train and test-sets
-train, test = supervised_values[0:-12], supervised_values[-12:]
-
+train, test = supervised_values[0:train_index], supervised_values[train_index:]
+print("train seq:",train)
+print("test seq:",test)
 # transform the scale of the data
 scaler, train_scaled, test_scaled = scale(train, test)
 
+'''
 # fit the model
+The LSTM layer expects input to be in a matrix with the dimensions: [samples, time steps, features]
+'''
+
 lstm_model = fit_lstm(train_scaled, 1, 3000, 4)
+# lstm_model = fit_lstm_multiple_layer(train_scaled, 1, 3000, 4)
+
 # forecast the entire training dataset to build up state for forecasting
 train_reshaped = train_scaled[:, 0].reshape(len(train_scaled), 1, 1)
 lstm_model.predict(train_reshaped, batch_size=1)
 
 # walk-forward validation on the test data
 predictions = list()
+print(test_scaled)
+
+''''''
 for i in range(len(test_scaled)):
 	# make one-step forecast
 	X, y = test_scaled[i, 0:-1], test_scaled[i, -1]
+	print(X)
 	yhat = forecast_lstm(lstm_model, 1, X)
 	# invert scaling
 	yhat = invert_scale(scaler, X, yhat)
@@ -124,10 +163,24 @@ for i in range(len(test_scaled)):
 	expected = raw_values[len(train) + i + 1]
 	print('Month=%d, Predicted=%f, Expected=%f' % (i + 1, yhat, expected))
 
+
 # report performance
-rmse = sqrt(mean_squared_error(raw_values[-12:], predictions))
+rmse = sqrt(mean_squared_error(raw_values[train_index:], predictions))
 print('Test RMSE: %.3f' % rmse)
 # line plot of observed vs predicted
-pyplot.plot(raw_values[-12:])
+pyplot.plot(raw_values[train_index:])
 pyplot.plot(predictions)
 pyplot.show()
+
+'''
+直接预测下一个数据
+'''
+X = test_scaled[0, 0:-1]
+X = X.reshape(1, 1, len(X))
+yhat = lstm_model.predict(X)
+yhat = invert_scale(scaler, X, yhat)
+# invert differencing
+yhat = inverse_difference(raw_values, yhat, len(test_scaled))
+# store forecast
+
+print(yhat)
